@@ -1,0 +1,136 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum DeliveryStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  DELIVERED
+  RETRYING
+  FAILED
+  DEAD_LETTER
+  CANCELLED
+}
+
+enum CircuitState {
+  CLOSED
+  OPEN
+  HALF_OPEN
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  name          String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  refreshTokens RefreshToken[]
+  apiKeys       ApiKey[]
+  endpoints     Endpoint[]
+  events        Event[]
+  auditLogs     AuditLog[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  key         String    @unique // e.g., whkey_...
+  name        String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  isActive    Boolean   @default(true)
+}
+
+model Endpoint {
+  id                 String          @id @default(uuid())
+  name               String
+  description        String?
+  url                String
+  secret             String          // Webhook signing secret (e.g., whsec_...)
+  isActive           Boolean         @default(true)
+  isVerified         Boolean         @default(false)
+  verificationToken  String?         // Token sent as verification challenge
+  circuitState       CircuitState    @default(CLOSED)
+  circuitFailureCount Int            @default(0)
+  circuitOpenedAt    DateTime?
+  rateLimitPerSecond Int             @default(10) // Concurrent connection or rate limit
+  userId             String
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions      Subscription[]
+  deliveryLogs       DeliveryLog[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+}
+
+model Subscription {
+  id           String   @id @default(uuid())
+  eventType    String   // e.g., "order.created.v1"
+  endpointId   String
+  endpoint     Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@unique([endpointId, eventType])
+}
+
+model Event {
+  id             String         @id @default(uuid())
+  eventType      String         // e.g., "order.created.v1"
+  payload        Json
+  idempotencyKey String?
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveryLogs   DeliveryLog[]
+  createdAt      DateTime       @default(now())
+
+  @@unique([userId, idempotencyKey])
+}
+
+model DeliveryLog {
+  id              String         @id @default(uuid())
+  eventId         String
+  event           Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  endpointId      String
+  endpoint        Endpoint       @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  status          DeliveryStatus @default(PENDING)
+  attempt         Int            @default(1)
+  requestHeaders  Json?
+  requestPayload  Json?
+  responseHeaders Json?
+  responseBody    String?
+  statusCode      Int?
+  errorDetails    String?
+  latencyMs       Int?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  action       String   // e.g., "ENDPOINT_CREATED", "ENDPOINT_DELETED"
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId   String?
+  resourceType String?  // e.g., "ENDPOINT", "API_KEY"
+  ipAddress    String?
+  details      Json?
+  createdAt    DateTime @default(now())
+}
