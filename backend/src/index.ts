@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
+import apiRouter from './routes/index.js';
 
 dotenv.config();
 
@@ -16,6 +17,9 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(cookieParser());
+
+// Register API v1 routes
+app.use('/api/v1', apiRouter);
 
 // Simple live healthcheck
 app.get('/health', (req, res) => {
