@@ -1,10 +1,20 @@
 import dotenv from 'dotenv';
+import { webhookWorker } from './queue/worker.js';
 
 dotenv.config();
 
-console.log('Starting Webhook Worker...');
+console.log('Webhook Background Worker Process is running...');
+console.log('Worker listening on BullMQ queue: "webhook-delivery-queue"');
 
-// Worker logic will be implemented here on Day 3 and 4
-setInterval(() => {
-  console.log('Worker is listening for queued jobs...');
-}, 60000);
+// Handle process termination cleanly
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM signal received. Shutting down worker...');
+  await webhookWorker.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT signal received. Shutting down worker...');
+  await webhookWorker.close();
+  process.exit(0);
+});
