@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db.js';
 import { z } from 'zod';
+import axios from 'axios';
 import { validateWebhookUrl } from '../utils/ssrf.js';
 import { writeAuditLog } from '../utils/audit.js';
 
@@ -252,5 +253,133 @@ export async function deleteEndpoint(req: Request, res: Response) {
     return res.json({ message: 'Webhook endpoint deleted successfully' });
   } catch (error) {
     return res.status(500).json({ error: 'Internal server error deleting endpoint' });
+  }
+}
+
+export async function getEndpointLogs(req: Request, res: Response) {
+  try {
+    const user = req.user!;
+    const { id } = req.params;
+    
+    const query = z.object({
+      page: z.string().optional().transform(val => (val ? parseInt(val, 10) : 1)),
+      limit: z.string().optional().transform(val => (val ? parseInt(val, 10) : 10)),
+      status: z.string().optional()
+    }).parse(req.query);
+
+    const skip = (query.page - 1) * query.limit;
+
+    // Verify endpoint belongs to user
+    const endpoint = await prisma.endpoint.findFirst({
+      where: { id, userId: user.id }
+    });
+
+    if (!endpoint) {
+      return res.status(404).json({ error: 'Webhook endpoint not found' });
+    }
+
+    const where: any = { endpointId: id };
+    if (query.status) {
+      where.status = query.status;
+    }
+
+    const [logs, total] = await prisma.$transaction([
+      prisma.deliveryLog.findMany({
+        where,
+        skip,
+        take: query.limit,
+        include: {
+          event: {
+            select: {
+              eventType: true
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.deliveryLog.count({ where })
+    ]);
+
+    return res.json({
+      logs,
+      meta: {
+        total,
+        page: query.page,
+        limit: query.limit,
+        totalPages: Math.ceil(total / query.limit)
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error fetching logs' });
+  }
+}
+
+export async function verifyEndpoint(req: Request, res: Response) {
+  try {
+    const user = req.user!;
+    const { id } = req.params;
+
+    const endpoint = await prisma.endpoint.findFirst({
+      where: { id, userId: user.id }
+    });
+
+    if (!endpoint) {
+      return res.status(404).json({ error: 'Webhook endpoint not found' });
+    }
+
+    if (endpoint.isVerified) {
+      return res.status(400).json({ error: 'Endpoint is already verified' });
+    }
+
+    const challengeToken = endpoint.verificationToken;
+    if (!challengeToken) {
+      return res.status(400).json({ error: 'Verification token not initialized' });
+    }
+
+    try {
+      // Execute challenge GET request to client URL
+      const response = await axios.get(endpoint.url, {
+        params: { challenge: challengeToken },
+        timeout: 5000 // 5 second timeout
+      });
+
+      // Check if client returned challenge token in response body
+      const dataStr = typeof response.data === 'string' 
+        ? response.data.trim() 
+        : typeof response.data === 'object' && response.data !== null
+        ? JSON.stringify(response.data)
+        : '';
+
+      const isMatch = dataStr.includes(challengeToken);
+
+      if (!isMatch) {
+        return res.status(400).json({ 
+          error: `Challenge verification failed: client response did not match the expected challenge token.` 
+        });
+      }
+
+      // Success: mark as verified
+      await prisma.endpoint.update({
+        where: { id },
+        data: { isVerified: true }
+      });
+
+      await writeAuditLog({
+        userId: user.id,
+        action: 'ENDPOINT_VERIFIED',
+        resourceId: id,
+        resourceType: 'ENDPOINT',
+        ipAddress: req.ip,
+        details: { url: endpoint.url }
+      });
+
+      return res.json({ message: 'Webhook endpoint verified successfully' });
+    } catch (err: any) {
+      return res.status(400).json({ 
+        error: `Challenge GET request to ${endpoint.url} failed: ${err.message}` 
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error verifying endpoint' });
   }
 }

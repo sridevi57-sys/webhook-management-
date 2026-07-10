@@ -1,10 +1,13 @@
 import { Router } from 'express';
-import { publishEvent } from '../controllers/event.controller.js';
-import { requireApiKey } from '../middlewares/auth.js';
+import { publishEvent, replayEvent } from '../controllers/event.controller.js';
+import { requireApiKey, requireAuth } from '../middlewares/auth.js';
 
 const router = Router();
 
-// Protect event publishing with server-to-server API Key check
+// Ingestion requests are authenticated using server-to-server API Keys
 router.post('/', requireApiKey, publishEvent);
+
+// Replay requests from Dashboard are authenticated using JWT Access Tokens
+router.post('/:id/replay', requireAuth, replayEvent);
 
 export default router;

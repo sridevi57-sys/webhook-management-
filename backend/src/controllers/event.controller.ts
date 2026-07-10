@@ -160,3 +160,92 @@ export async function publishEvent(req: Request, res: Response) {
     return res.status(500).json({ error: 'Internal server error ingesting event: ' + (error as Error).message });
   }
 }
+
+export async function replayEvent(req: Request, res: Response) {
+  try {
+    const user = req.user!;
+    const { id } = req.params; // Event ID
+
+    const event = await prisma.event.findFirst({
+      where: { id, userId: user.id }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Determine target endpoints (allow passing specific endpointId in body)
+    const { endpointId } = req.body;
+    let targetEndpoints = [];
+
+    if (endpointId) {
+      const endpoint = await prisma.endpoint.findFirst({
+        where: { id: endpointId, userId: user.id, isActive: true, isVerified: true }
+      });
+      if (!endpoint) {
+        return res.status(404).json({ error: 'Endpoint not found or unhealthy/unverified' });
+      }
+      targetEndpoints = [endpoint];
+    } else {
+      // Find all active/verified endpoints subscribed to this event type
+      targetEndpoints = await prisma.endpoint.findMany({
+        where: {
+          userId: user.id,
+          isActive: true,
+          isVerified: true,
+          subscriptions: {
+            some: {
+              eventType: event.eventType
+            }
+          }
+        }
+      });
+    }
+
+    if (targetEndpoints.length === 0) {
+      return res.status(400).json({ error: 'No active/verified endpoints are subscribed to this event type' });
+    }
+
+    const deliveriesInfo = [];
+
+    for (const endpoint of targetEndpoints) {
+      // Create new log entry
+      const log = await prisma.deliveryLog.create({
+        data: {
+          eventId: event.id,
+          endpointId: endpoint.id,
+          status: 'QUEUED',
+          attempt: 1
+        }
+      });
+
+      // Add to BullMQ
+      const job = await deliveryQueue.add(
+        'deliver-webhook',
+        {
+          eventId: event.id,
+          endpointId: endpoint.id,
+          deliveryLogId: log.id,
+          attempt: 1
+        },
+        {
+          priority: resolveEventPriority(event.eventType),
+          attempts: 1
+        }
+      );
+
+      deliveriesInfo.push({
+        endpointId: endpoint.id,
+        deliveryLogId: log.id,
+        jobId: job.id
+      });
+    }
+
+    return res.json({
+      message: `Event replayed successfully to ${targetEndpoints.length} endpoint(s)`,
+      deliveries: deliveriesInfo
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error replaying event' });
+  }
+}

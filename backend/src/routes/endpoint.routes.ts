@@ -4,7 +4,9 @@ import {
   getEndpoints, 
   getEndpointById, 
   updateEndpoint, 
-  deleteEndpoint 
+  deleteEndpoint,
+  getEndpointLogs,
+  verifyEndpoint
 } from '../controllers/endpoint.controller.js';
 import { 
   addSubscription, 
@@ -23,6 +25,10 @@ router.get('/', getEndpoints);
 router.get('/:id', getEndpointById);
 router.patch('/:id', updateEndpoint);
 router.delete('/:id', deleteEndpoint);
+
+// Logs & Challenge Verification
+router.get('/:id/logs', getEndpointLogs);
+router.post('/:id/verify', verifyEndpoint);
 
 // Event subscription management
 router.post('/:endpointId/subscriptions', addSubscription);
