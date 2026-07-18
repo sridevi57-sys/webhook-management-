@@ -236,8 +236,33 @@ export const webhookWorker = new Worker(
       // 6. Failure Flow & Circuit Breaker State Transition
       const nextFailureCount = endpoint.circuitFailureCount + 1;
       
-      // If we are in HALF_OPEN and fail, or reach failure threshold in CLOSED
-      if (currentCircuitState === 'HALF_OPEN' || nextFailureCount >= CIRCUIT_FAILURE_THRESHOLD) {
+      const AUTO_DISABLE_THRESHOLD = 50;
+
+      if (nextFailureCount >= AUTO_DISABLE_THRESHOLD) {
+        // Auto-disable endpoint due to persistent errors (SDE Resilience feature)
+        await prisma.endpoint.update({
+          where: { id: endpointId },
+          data: {
+            isActive: false,
+            circuitState: 'CLOSED', // reset circuit state
+            circuitFailureCount: 0,
+            circuitOpenedAt: null
+          }
+        });
+
+        await writeAuditLog({
+          userId: endpoint.userId,
+          action: 'ENDPOINT_AUTO_DISABLED',
+          resourceId: endpointId,
+          resourceType: 'ENDPOINT',
+          details: {
+            url: endpoint.url,
+            consecutiveFailures: nextFailureCount,
+            reason: `Endpoint automatically disabled after crossing limit of ${AUTO_DISABLE_THRESHOLD} consecutive delivery failures`
+          }
+        });
+        console.error(`[AutoDisable] Endpoint ${endpoint.url} automatically deactivated due to persistent failures.`);
+      } else if (currentCircuitState === 'HALF_OPEN' || nextFailureCount >= CIRCUIT_FAILURE_THRESHOLD) {
         await prisma.endpoint.update({
           where: { id: endpointId },
           data: {

@@ -4,6 +4,7 @@ import endpointRoutes from './endpoint.routes.js';
 import keyRoutes from './key.routes.js';
 import eventRoutes from './event.routes.js';
 import auditRoutes from './audit.routes.js';
+import metricsRoutes from './metrics.routes.js';
 
 const router = Router();
 
@@ -12,5 +13,6 @@ router.use('/endpoints', endpointRoutes);
 router.use('/keys', keyRoutes);
 router.use('/events', eventRoutes);
 router.use('/audit', auditRoutes);
+router.use('/metrics', metricsRoutes);
 
 export default router;
